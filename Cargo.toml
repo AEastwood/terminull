@@ -8,8 +8,7 @@ license = "MIT"
 readme = "README.md"
 keywords = ["terminal", "pty", "gui", "egui", "multiplexer"]
 categories = ["command-line-utilities", "gui"]
-# Set this once the repo is on GitHub:
-# repository = "https://github.com/<you>/terminull"
+repository = "https://github.com/AEastwood/terminull"
 
 [dependencies]
 eframe = "0.29"
