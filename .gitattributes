@@ -1,0 +1,3 @@
+# Normalise line endings: store as LF in the repo, convert on checkout.
+* text=auto
+*.rs text eol=lf

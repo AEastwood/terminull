@@ -1,0 +1,18 @@
+# Compiled output
+/target
+
+# Backup files from rustfmt and friends
+**/*.rs.bk
+
+# Debug symbols
+*.pdb
+
+# Editor and OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Scratch / log files
+*.log

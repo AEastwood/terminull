@@ -1,0 +1,22 @@
+[package]
+name = "terminull"
+version = "0.1.0"
+edition = "2021"
+description = "Run and manage many terminals from one window, with live previews, tiling and broadcast."
+authors = ["Adam Eastwood <adam-3@live.co.uk>"]
+license = "MIT"
+readme = "README.md"
+keywords = ["terminal", "pty", "gui", "egui", "multiplexer"]
+categories = ["command-line-utilities", "gui"]
+# Set this once the repo is on GitHub:
+# repository = "https://github.com/<you>/terminull"
+
+[dependencies]
+eframe = "0.29"
+portable-pty = "0.8"
+vte = "0.13"
+anyhow = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
