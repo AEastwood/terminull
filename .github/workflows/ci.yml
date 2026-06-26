@@ -15,7 +15,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust (MSVC)
-        run: rustup toolchain install stable-x86_64-pc-windows-msvc --component rustfmt clippy --no-self-update
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-msvc --no-self-update
+          rustup default stable-x86_64-pc-windows-msvc
+          rustup component add rustfmt clippy
 
       - name: Cache cargo
         uses: actions/cache@v4
