@@ -172,7 +172,7 @@ impl TerminullApp {
                 ui.label("Spawn");
                 ui.add(
                     egui::DragValue::new(&mut self.spawn_count)
-                        .range(1..=64)
+                        .range(1..=256)
                         .speed(0.2),
                 );
                 if ui.button("Spawn instances").clicked() {
@@ -184,13 +184,13 @@ impl TerminullApp {
                 ui.add_enabled_ui(self.grid_view, |ui| {
                     ui.add(
                         egui::DragValue::new(&mut self.grid_rows)
-                            .range(1..=6)
+                            .range(1..=8)
                             .prefix("rows "),
                     );
                     ui.label("×");
                     ui.add(
                         egui::DragValue::new(&mut self.grid_cols)
-                            .range(1..=6)
+                            .range(1..=8)
                             .prefix("cols "),
                     );
                 });
@@ -444,8 +444,8 @@ impl TerminullApp {
     /// Tiled grid view: lay out the first `rows × cols` terminals side by side,
     /// each independently interactive.
     fn grid_central(&mut self, ui: &mut egui::Ui) {
-        let cols = self.grid_cols.clamp(1, 6) as usize;
-        let rows = self.grid_rows.clamp(1, 6) as usize;
+        let cols = self.grid_cols.clamp(1, 8) as usize;
+        let rows = self.grid_rows.clamp(1, 8) as usize;
 
         let ids: Vec<u64> = self
             .terminals
