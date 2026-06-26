@@ -19,4 +19,10 @@ On Windows, use the MSVC toolchain (`rustup default stable-x86_64-pc-windows-msv
 
 Built with [egui](https://github.com/emilk/egui),
 [portable-pty](https://crates.io/crates/portable-pty) and
-[vte](https://crates.io/crates/vte). MIT licensed.
+[vte](https://crates.io/crates/vte).
+
+## License
+
+Fully open source under the [MIT license](LICENSE). Fork it, ship it, sell it,
+do whatever you want with it.
+
