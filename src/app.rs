@@ -22,6 +22,11 @@ pub struct TerminullApp {
     spawn_count: i32,
     /// Command typed into the broadcast box (sent to every terminal at once).
     broadcast: String,
+    /// Previously sent broadcast commands, oldest first.
+    broadcast_history: Vec<String>,
+    /// Cursor into `broadcast_history` while scrolling with Up/Down. `None`
+    /// means we're editing a fresh line rather than browsing history.
+    broadcast_history_pos: Option<usize>,
     /// When true, the central area tiles terminals in a grid instead of showing
     /// a single full-screen terminal.
     grid_view: bool,
@@ -40,6 +45,8 @@ impl Default for TerminullApp {
             active: None,
             spawn_count: 3,
             broadcast: String::new(),
+            broadcast_history: Vec::new(),
+            broadcast_history_pos: None,
             grid_view: false,
             grid_rows: 2,
             grid_cols: 2,
@@ -125,6 +132,44 @@ impl TerminullApp {
             t.send(b"\r");
         }
     }
+
+    /// Record a sent broadcast in the history, skipping blanks and immediate
+    /// duplicates, and reset the browse cursor.
+    fn record_broadcast(&mut self, cmd: String) {
+        if !cmd.is_empty() && self.broadcast_history.last() != Some(&cmd) {
+            self.broadcast_history.push(cmd);
+        }
+        self.broadcast_history_pos = None;
+    }
+
+    /// Step back to an older broadcast command (Up arrow).
+    fn broadcast_history_prev(&mut self) {
+        if self.broadcast_history.is_empty() {
+            return;
+        }
+        let pos = match self.broadcast_history_pos {
+            Some(0) => 0,
+            Some(p) => p - 1,
+            None => self.broadcast_history.len() - 1,
+        };
+        self.broadcast_history_pos = Some(pos);
+        self.broadcast = self.broadcast_history[pos].clone();
+    }
+
+    /// Step forward to a newer broadcast command, or back to a blank line once
+    /// past the newest entry (Down arrow).
+    fn broadcast_history_next(&mut self) {
+        let Some(pos) = self.broadcast_history_pos else {
+            return;
+        };
+        if pos + 1 < self.broadcast_history.len() {
+            self.broadcast_history_pos = Some(pos + 1);
+            self.broadcast = self.broadcast_history[pos + 1].clone();
+        } else {
+            self.broadcast_history_pos = None;
+            self.broadcast.clear();
+        }
+    }
 }
 
 impl eframe::App for TerminullApp {
@@ -206,10 +251,21 @@ impl TerminullApp {
                         .desired_width(320.0)
                         .hint_text("command to send to ALL terminals"),
                 );
+
+                // Up/Down scrolls through previously sent commands, shell-style.
+                if resp.has_focus() {
+                    if ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+                        self.broadcast_history_prev();
+                    } else if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+                        self.broadcast_history_next();
+                    }
+                }
+
                 let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if ui.button("Send to all").clicked() || enter {
                     let cmd = self.broadcast.clone();
                     self.broadcast_command(&cmd);
+                    self.record_broadcast(cmd);
                     self.broadcast.clear();
                     resp.request_focus();
                 }
