@@ -367,3 +367,381 @@ impl Perform for Grid {
     fn osc_dispatch(&mut self, _: &[&[u8]], _: bool) {}
     fn esc_dispatch(&mut self, _: &[u8], _: bool, _: u8) {}
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Feed raw bytes through a fresh VT parser into the grid, exactly as the
+    /// reader thread does in `terminal.rs`.
+    fn feed(grid: &mut Grid, bytes: &[u8]) {
+        let mut parser = vte::Parser::new();
+        for &b in bytes {
+            parser.advance(grid, b);
+        }
+    }
+
+    /// Collect a row's characters into a `String`, trailing blanks trimmed.
+    fn row(grid: &Grid, y: usize) -> String {
+        let line: String = (0..grid.cols).map(|x| grid.cell(x, y).c).collect();
+        line.trim_end().to_string()
+    }
+
+    #[test]
+    fn new_grid_is_blank_with_given_dimensions() {
+        let g = Grid::new(8, 4);
+        assert_eq!(g.cols, 8);
+        assert_eq!(g.rows, 4);
+        assert_eq!(g.cx, 0);
+        assert_eq!(g.cy, 0);
+        for y in 0..g.rows {
+            for x in 0..g.cols {
+                let cell = g.cell(x, y);
+                assert_eq!(cell.c, ' ');
+                assert_eq!(cell.fg, DEFAULT_FG);
+                assert_eq!(cell.bg, DEFAULT_BG);
+                assert!(!cell.bold);
+            }
+        }
+    }
+
+    #[test]
+    fn printing_text_fills_cells_and_advances_cursor() {
+        let mut g = Grid::new(20, 3);
+        feed(&mut g, b"hello");
+        assert_eq!(row(&g, 0), "hello");
+        assert_eq!(g.cx, 5);
+        assert_eq!(g.cy, 0);
+    }
+
+    #[test]
+    fn printing_past_the_right_edge_wraps_to_next_line() {
+        let mut g = Grid::new(5, 3);
+        feed(&mut g, b"abcdefg");
+        assert_eq!(row(&g, 0), "abcde");
+        assert_eq!(row(&g, 1), "fg");
+        assert_eq!(g.cy, 1);
+        assert_eq!(g.cx, 2);
+    }
+
+    #[test]
+    fn carriage_return_returns_to_column_zero() {
+        let mut g = Grid::new(20, 3);
+        feed(&mut g, b"hello\rworld");
+        assert_eq!(row(&g, 0), "world");
+        assert_eq!(g.cy, 0);
+        assert_eq!(g.cx, 5);
+    }
+
+    #[test]
+    fn newline_moves_down_keeping_column() {
+        let mut g = Grid::new(20, 3);
+        feed(&mut g, b"ab\ncd");
+        // \n is a bare line feed: down a row, column preserved (no CR).
+        assert_eq!(g.cy, 1);
+        assert_eq!(g.cx, 4);
+        assert_eq!(g.cell(2, 1).c, 'c');
+        assert_eq!(g.cell(3, 1).c, 'd');
+    }
+
+    #[test]
+    fn crlf_starts_a_fresh_line() {
+        let mut g = Grid::new(20, 3);
+        feed(&mut g, b"ab\r\ncd");
+        assert_eq!(row(&g, 0), "ab");
+        assert_eq!(row(&g, 1), "cd");
+    }
+
+    #[test]
+    fn tab_advances_to_next_eight_column_stop() {
+        let mut g = Grid::new(40, 2);
+        feed(&mut g, b"a\tb");
+        assert_eq!(g.cell(0, 0).c, 'a');
+        assert_eq!(g.cell(8, 0).c, 'b');
+        assert_eq!(g.cx, 9);
+    }
+
+    #[test]
+    fn tab_is_clamped_to_the_last_column() {
+        let mut g = Grid::new(10, 2);
+        feed(&mut g, b"\t\t");
+        assert_eq!(g.cx, g.cols - 1);
+    }
+
+    #[test]
+    fn backspace_moves_left_but_not_past_column_zero() {
+        let mut g = Grid::new(10, 2);
+        feed(&mut g, b"ab\x08");
+        assert_eq!(g.cx, 1);
+        feed(&mut g, b"\x08\x08\x08");
+        assert_eq!(g.cx, 0);
+    }
+
+    #[test]
+    fn writing_past_the_bottom_scrolls_the_screen_up() {
+        let mut g = Grid::new(10, 2);
+        feed(&mut g, b"top\r\nbottom\r\nnext");
+        // First line scrolled off; "bottom" moved up, "next" on the last row.
+        assert_eq!(row(&g, 0), "bottom");
+        assert_eq!(row(&g, 1), "next");
+        assert_eq!(g.cy, 1);
+    }
+
+    #[test]
+    fn cursor_position_csi_is_one_based() {
+        let mut g = Grid::new(20, 10);
+        feed(&mut g, b"\x1b[3;5H");
+        assert_eq!(g.cy, 2);
+        assert_eq!(g.cx, 4);
+        // Bare \x1b[H homes the cursor.
+        feed(&mut g, b"\x1b[H");
+        assert_eq!(g.cy, 0);
+        assert_eq!(g.cx, 0);
+    }
+
+    #[test]
+    fn cursor_position_is_clamped_to_the_grid() {
+        let mut g = Grid::new(20, 10);
+        feed(&mut g, b"\x1b[999;999H");
+        assert_eq!(g.cy, 9);
+        assert_eq!(g.cx, 19);
+    }
+
+    #[test]
+    fn relative_cursor_movement_obeys_bounds() {
+        let mut g = Grid::new(20, 10);
+        feed(&mut g, b"\x1b[5;5H");
+        feed(&mut g, b"\x1b[2A"); // up 2
+        assert_eq!(g.cy, 2);
+        feed(&mut g, b"\x1b[3B"); // down 3
+        assert_eq!(g.cy, 5);
+        feed(&mut g, b"\x1b[4C"); // right 4
+        assert_eq!(g.cx, 8);
+        feed(&mut g, b"\x1b[2D"); // left 2
+        assert_eq!(g.cx, 6);
+        // Clamp at the edges.
+        feed(&mut g, b"\x1b[99A");
+        assert_eq!(g.cy, 0);
+        feed(&mut g, b"\x1b[99D");
+        assert_eq!(g.cx, 0);
+    }
+
+    #[test]
+    fn default_movement_argument_is_one() {
+        let mut g = Grid::new(20, 10);
+        feed(&mut g, b"\x1b[5;5H\x1b[B"); // no arg -> down 1
+        assert_eq!(g.cy, 5);
+    }
+
+    #[test]
+    fn column_and_row_absolute_moves() {
+        let mut g = Grid::new(20, 10);
+        feed(&mut g, b"\x1b[7G"); // column 7 (1-based)
+        assert_eq!(g.cx, 6);
+        feed(&mut g, b"\x1b[4d"); // row 4 (1-based)
+        assert_eq!(g.cy, 3);
+    }
+
+    #[test]
+    fn erase_line_from_cursor() {
+        let mut g = Grid::new(10, 2);
+        feed(&mut g, b"abcdef");
+        feed(&mut g, b"\x1b[3G"); // back to column 3
+        feed(&mut g, b"\x1b[0K");
+        assert_eq!(row(&g, 0), "ab");
+    }
+
+    #[test]
+    fn erase_line_to_cursor_replaces_with_spaces() {
+        let mut g = Grid::new(10, 2);
+        feed(&mut g, b"abcdef");
+        feed(&mut g, b"\x1b[3G"); // column 3 (index 2)
+        feed(&mut g, b"\x1b[1K");
+        // Columns 0..=2 blanked, the rest intact.
+        assert_eq!(g.cell(0, 0).c, ' ');
+        assert_eq!(g.cell(2, 0).c, ' ');
+        assert_eq!(g.cell(3, 0).c, 'd');
+    }
+
+    #[test]
+    fn erase_whole_line() {
+        let mut g = Grid::new(10, 2);
+        feed(&mut g, b"abcdef");
+        feed(&mut g, b"\x1b[2K");
+        assert_eq!(row(&g, 0), "");
+    }
+
+    #[test]
+    fn erase_all_clears_screen_and_homes_cursor() {
+        let mut g = Grid::new(10, 3);
+        feed(&mut g, b"line1\r\nline2\r\nline3");
+        feed(&mut g, b"\x1b[2J");
+        for y in 0..g.rows {
+            assert_eq!(row(&g, y), "");
+        }
+        assert_eq!(g.cx, 0);
+        assert_eq!(g.cy, 0);
+    }
+
+    #[test]
+    fn erase_below_keeps_earlier_rows() {
+        let mut g = Grid::new(10, 3);
+        feed(&mut g, b"aaa\r\nbbb\r\nccc");
+        feed(&mut g, b"\x1b[2;1H"); // row 2, col 1
+        feed(&mut g, b"\x1b[0J"); // erase from cursor to end
+        assert_eq!(row(&g, 0), "aaa");
+        assert_eq!(row(&g, 1), "");
+        assert_eq!(row(&g, 2), "");
+    }
+
+    #[test]
+    fn erase_above_keeps_later_rows() {
+        let mut g = Grid::new(10, 3);
+        feed(&mut g, b"aaa\r\nbbb\r\nccc");
+        feed(&mut g, b"\x1b[2;3H"); // row 2, col 3
+        feed(&mut g, b"\x1b[1J"); // erase from start to cursor
+        assert_eq!(row(&g, 0), "");
+        assert_eq!(row(&g, 1), ""); // cols up to cursor cleared; rest were blank
+        assert_eq!(row(&g, 2), "ccc");
+    }
+
+    #[test]
+    fn sgr_sets_basic_foreground_and_background() {
+        let mut g = Grid::new(10, 2);
+        feed(&mut g, b"\x1b[31;42mX");
+        let cell = g.cell(0, 0);
+        assert_eq!(cell.c, 'X');
+        assert_eq!(cell.fg, PALETTE[1]); // red
+        assert_eq!(cell.bg, PALETTE[2]); // green
+    }
+
+    #[test]
+    fn sgr_bright_colors_use_upper_palette() {
+        let mut g = Grid::new(10, 2);
+        feed(&mut g, b"\x1b[91;102mX");
+        let cell = g.cell(0, 0);
+        assert_eq!(cell.fg, PALETTE[1 + 8]); // bright red
+        assert_eq!(cell.bg, PALETTE[2 + 8]); // bright green
+    }
+
+    #[test]
+    fn sgr_bold_and_reset() {
+        let mut g = Grid::new(10, 2);
+        feed(&mut g, b"\x1b[1mB");
+        assert!(g.cell(0, 0).bold);
+        feed(&mut g, b"\x1b[0mN");
+        let n = g.cell(1, 0);
+        assert!(!n.bold);
+        assert_eq!(n.fg, DEFAULT_FG);
+        assert_eq!(n.bg, DEFAULT_BG);
+    }
+
+    #[test]
+    fn sgr_empty_params_reset() {
+        let mut g = Grid::new(10, 2);
+        feed(&mut g, b"\x1b[31m\x1b[mX"); // set red, then bare reset
+        assert_eq!(g.cell(0, 0).fg, DEFAULT_FG);
+    }
+
+    #[test]
+    fn sgr_default_fg_bg_codes() {
+        let mut g = Grid::new(10, 2);
+        feed(&mut g, b"\x1b[31;42m\x1b[39;49mX");
+        let cell = g.cell(0, 0);
+        assert_eq!(cell.fg, DEFAULT_FG);
+        assert_eq!(cell.bg, DEFAULT_BG);
+    }
+
+    #[test]
+    fn sgr_256_color_foreground() {
+        let mut g = Grid::new(10, 2);
+        // 38;5;1 -> palette red.
+        feed(&mut g, b"\x1b[38;5;1mX");
+        assert_eq!(g.cell(0, 0).fg, PALETTE[1]);
+    }
+
+    #[test]
+    fn sgr_truecolor_foreground_and_background() {
+        let mut g = Grid::new(10, 2);
+        feed(&mut g, b"\x1b[38;2;10;20;30;48;2;40;50;60mX");
+        let cell = g.cell(0, 0);
+        assert_eq!(cell.fg, [10, 20, 30]);
+        assert_eq!(cell.bg, [40, 50, 60]);
+    }
+
+    #[test]
+    fn color256_palette_cube_and_grayscale() {
+        // 0..=15 map straight to the 16-colour palette.
+        assert_eq!(color256(5), PALETTE[5]);
+        // 16 is the bottom of the cube: pure black.
+        assert_eq!(color256(16), [0, 0, 0]);
+        // 231 is the top of the cube: pure white.
+        assert_eq!(color256(231), [255, 255, 255]);
+        // Grayscale ramp start.
+        assert_eq!(color256(232), [8, 8, 8]);
+        // Grayscale ramp end.
+        assert_eq!(color256(255), [238, 238, 238]);
+    }
+
+    #[test]
+    fn resize_preserves_overlapping_content() {
+        let mut g = Grid::new(10, 4);
+        feed(&mut g, b"hello");
+        g.resize(20, 6);
+        assert_eq!(g.cols, 20);
+        assert_eq!(g.rows, 6);
+        assert_eq!(row(&g, 0), "hello");
+    }
+
+    #[test]
+    fn resize_clamps_cursor_into_new_bounds() {
+        let mut g = Grid::new(10, 4);
+        feed(&mut g, b"\x1b[4;9H"); // near bottom-right
+        g.resize(5, 2);
+        assert!(g.cx <= g.cols - 1);
+        assert!(g.cy <= g.rows - 1);
+        assert_eq!(g.cx, 4);
+        assert_eq!(g.cy, 1);
+    }
+
+    #[test]
+    fn resize_enforces_minimum_of_one() {
+        let mut g = Grid::new(10, 4);
+        g.resize(0, 0);
+        assert_eq!(g.cols, 1);
+        assert_eq!(g.rows, 1);
+    }
+
+    #[test]
+    fn resize_to_same_dimensions_is_a_noop() {
+        let mut g = Grid::new(10, 4);
+        let before = g.dirty;
+        g.resize(10, 4);
+        assert_eq!(g.dirty, before);
+    }
+
+    #[test]
+    fn dirty_counter_advances_on_output() {
+        let mut g = Grid::new(10, 2);
+        let before = g.dirty;
+        feed(&mut g, b"x");
+        assert_ne!(g.dirty, before);
+    }
+
+    #[test]
+    fn lock_grid_recovers_from_a_poisoned_mutex() {
+        use std::sync::{Arc, Mutex};
+        let m = Arc::new(Mutex::new(Grid::new(4, 2)));
+        let m2 = Arc::clone(&m);
+        // Poison the mutex by panicking while the lock is held.
+        let _ = std::thread::spawn(move || {
+            let _g = m2.lock().unwrap();
+            panic!("poison the lock");
+        })
+        .join();
+        // lock_grid must still hand back a usable guard.
+        let mut g = lock_grid(&m);
+        g.resize(6, 3);
+        assert_eq!(g.cols, 6);
+    }
+}
